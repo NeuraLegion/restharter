@@ -99,12 +99,18 @@ module Restharter
       File.write("restharter.har", full_har.to_json)
       puts "Done writing HAR file to disk"
 
+      puts "Do you wish to restart the scan with this HAR file? [Y/N]"
+      answer = STDIN.gets.to_s.strip
+      if answer.downcase != "y"
+        puts "Exiting..."
+        exit 0
+      end
       # restart scan with har file
       puts "Restarting scan with HAR file..."
       id = upload_har(full_har)
       resp = restart_scan(id)
       if resp.status_code == 201
-        puts "Scan restarted successfully: id=#{resp.body.to_s}"
+        puts "Scan restarted successfully: #{resp.body.to_s}"
       else
         puts "Error restarting scan: #{resp.status_code} #{resp.body.to_s}"
       end
@@ -119,17 +125,23 @@ module Restharter
     end
 
     private def restart_scan(file_id : String) : HTTP::Client::Response
+      scan_configs = get_config.as_h
+      scan_configs["discoveryTypes"].as_a.clear
+      scan_configs["discoveryTypes"].as_a << JSON::Any.new("archive")
+      scan_configs["fileId"] = JSON::Any.new(file_id)
+      # create hosts filter
+      filter = Array(JSON::Any).new
+      scan_configs["crawlerUrls"].as_a.each do |url|
+        filter << JSON::Any.new(URI.parse(url.as_s).host.to_s)
+      end
+      scan_configs.reject!("crawlerUrls")
+      scan_configs["hostsFilter"] = JSON::Any.new(filter)
+
       body = <<-JSON
-        {
-          "config": {
-            "discoveryTypes": [
-              "archive"
-            ],
-            "fileId": "#{file_id}"
-          }
-        }
+        {"config":#{scan_configs.to_json}}
         JSON
 
+      puts "Restarting scan with body: #{body}"
       resp = HTTP::Client.post("https://#{@host}/api/v1/scans/#{@scan_id}/retest", headers: headers, body: body)
     end
 
@@ -151,6 +163,14 @@ module Restharter
       resp = HTTP::Client.post("https://#{@host}/api/v1/files", headers: post_headers, body: body_io.to_s)
       puts "Done uploading HAR file #{resp.status_code}"
       JSON.parse(resp.body.to_s)["id"].to_s
+    end
+
+    private def get_config : JSON::Any
+      resp = HTTP::Client.get("https://#{@host}/api/v1/scans/#{@scan_id}/config", headers: headers)
+      unless resp.status_code == 200
+        raise "Error getting scan config: #{resp.status_code} #{resp.body.to_s}"
+      end
+      JSON.parse(resp.body.to_s)
     end
 
     private def get_ep(ep_id : String) : HTTP::Client::Response
