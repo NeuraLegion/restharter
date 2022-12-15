@@ -1,0 +1,17 @@
+name: restharter
+version: 0.1.0
+
+authors:
+  - Bar Hofesh <bar.hofesh@gmail.com>
+
+targets:
+  restharter:
+    main: src/restharter.cr
+
+dependencies:
+  har:
+    github: NeuraLegion/har
+
+crystal: 1.6.2
+
+license: MIT
