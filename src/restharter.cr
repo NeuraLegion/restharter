@@ -12,10 +12,19 @@ module Restharter
 
     def initialize(scan_url : String, @api_key : String)
       uri = URI.parse(scan_url)
+
       uri_host = uri.host
-      raise "Missing host" unless uri.host
+      unless uri.host
+        puts "Error: Missing host"
+        exit 1
+      end
+
       @host = uri.host.to_s
-      raise "Missing Scan ID" unless uri.path
+      unless uri.path
+        puts "Error: Missing scan ID"
+        exit 1
+      end
+
       uri_path = Path.new(uri.path.to_s)
       @scan_id = uri_path.parts[2].to_s.strip("/")
       puts "Cluster: #{@host}"
@@ -23,9 +32,11 @@ module Restharter
 
       resp = get_scan
       if resp.status_code == 404
-        raise "Scan #{@scan_id} not found"
+        puts "Error: Scan #{@scan_id} not found"
+        exit 1
       elsif resp.status_code == 401
-        raise "Invalid API key"
+        puts "Error: Invalid API key"
+        exit 1
       end
 
       # Get all entry point IDS
@@ -42,7 +53,8 @@ module Restharter
         index += 1
         ep_resp = get_ep(id)
         unless ep_resp.status_code == 200
-          raise "Error getting entry point #{id}: #{ep_resp.status_code} #{ep_resp.body.to_s}"
+          puts "Error: Error getting entry point #{id}: #{ep_resp.status_code} #{ep_resp.body.to_s}"
+          exit 1
         end
         ep = JSON.parse(ep_resp.body.to_s)
         request = ep["request"].as_h
@@ -126,6 +138,10 @@ module Restharter
 
     private def restart_scan(file_id : String) : HTTP::Client::Response
       scan_configs = get_config.as_h
+      unless scan_configs["discoveryTypes"].as_a.includes?("crawler")
+        puts "Scan is not a crawler scan, aborting"
+        exit 1
+      end
       scan_configs["discoveryTypes"].as_a.clear
       scan_configs["discoveryTypes"].as_a << JSON::Any.new("archive")
       scan_configs["fileId"] = JSON::Any.new(file_id)
@@ -168,7 +184,8 @@ module Restharter
     private def get_config : JSON::Any
       resp = HTTP::Client.get("https://#{@host}/api/v1/scans/#{@scan_id}/config", headers: headers)
       unless resp.status_code == 200
-        raise "Error getting scan config: #{resp.status_code} #{resp.body.to_s}"
+        puts "Error: Error getting scan config: #{resp.status_code} #{resp.body.to_s}"
+        exit 1
       end
       JSON.parse(resp.body.to_s)
     end
@@ -189,4 +206,10 @@ end
 
 # Usage
 # restharter https://cluster.example.com/api/v1/scans/12345678-1234-1234-1234-123456789012 api_key
+usage = "Usage: restharter <scan_url> <api_key>"
+unless ARGV.size == 2
+  puts usage
+  exit 1
+end
+
 Restharter::Run.new(ARGV[0], ARGV[1])
