@@ -22,6 +22,16 @@ This will look like
 bin/restharter https://app.neuralegion.com/scans/vEnJqXydfsdfsdfsdf 213213312
 ```
 
+### Docker usage
+
+1. clone the repo
+2. `cd` into the repo
+3. `docker build -t neuralegion/restharter .`
+
+```bash
+docker run -it neuralegion/restharter [scan_url] [api_key]
+```
+
 ## Contributing
 
 1. Fork it (<https://github.com/NeuraLegion/restharter/fork>)
