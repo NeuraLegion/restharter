@@ -39,71 +39,91 @@ module Restharter
         exit 1
       end
 
-      # Get all entry point IDS
-      ep_ids = Array(String).new
-      JSON.parse(get_eps.body.to_s).as_a.each do |ep|
-        ep_ids << ep["id"].as_s
+      # Get all entry points, taking pagination into account
+      total = 0
+      index = 0
+      begin
+        response = get_eps.body.to_s
+        eps_info = JSON.parse(response)
+      rescue e
+        puts "Error in response: #{response}"
+        raise e
+      end
+      total = eps_info["total"].as_i
+      if total == 0
+        puts "Error: the scan has no Entry Points to process"
+        exit 1
       end
 
-      puts "Found #{ep_ids.size} entry points, building HAR file..."
+      puts "Found #{total} entry points, building HAR file..."
       har = HAR::Log.new
-      index = 1
-      ep_ids.each do |id|
-        print "\rBuilding entry point #{index}/#{ep_ids.size}"
-        index += 1
-        ep_resp = get_ep(id)
-        unless ep_resp.status_code == 200
-          puts "Error: Error getting entry point #{id}: #{ep_resp.status_code} #{ep_resp.body.to_s}"
-          exit 1
-        end
-        ep = JSON.parse(ep_resp.body.to_s)
-        request = ep["request"].as_h
-        response = ep["response"].as_h
 
-        # Build Request
-        har_request = HAR::Request.new(
-          url: request["url"].as_s,
-          method: request["method"].as_s,
-          http_version: "HTTP/1.1"
-        )
+      while index < total
+        eps_info["items"].as_a.map(&.as_h.["id"]).each do |id|
+          index += 1
+          # Adding new EP to the log
+          ep_resp = get_ep(id.as_s)
+          unless ep_resp.status_code == 200
+            puts "Error: Error getting entry point #{id}: #{ep_resp.status_code} #{ep_resp.body.to_s}"
+            exit 1
+          end
+          ep = JSON.parse(ep_resp.body.to_s)
+          request = ep["request"].as_h
+          response = ep["response"].as_h
 
-        request["headers"].as_h.each do |k, v|
-          har_request.headers << HAR::Header.new(name: k, value: v.as_s)
-        end
-        if request["body"]?
-          har_request.post_data = HAR::PostData.new(
-            text: request["body"].as_s,
-            mime_type: request["headers"].as_h["Content-Type"]?.try &.as_s || ""
+          percentage = 100.0 * index / total
+          puts "[%6.2f %%] %s (%s) %s" % {percentage, ep["id"], request["method"], request["url"]}
+
+          # Build Request
+          har_request = HAR::Request.new(
+            url: request["url"].as_s,
+            method: request["method"].as_s,
+            http_version: "HTTP/1.1"
+          )
+
+          request["headers"].as_h.each do |k, v|
+            har_request.headers << HAR::Header.new(name: k, value: v.as_s)
+          end
+          if request["body"]?
+            har_request.post_data = HAR::PostData.new(
+              text: request["body"].as_s,
+              mime_type: request["headers"].as_h["Content-Type"]?.try &.as_s || ""
+            )
+          end
+
+          # Build Response
+          har_response = HAR::Response.new(
+            status: response["status"].as_i,
+            status_text: HTTP::Status.new(response["status"].as_i).description.to_s,
+            http_version: "HTTP/1.1",
+            content: HAR::Content.new(
+              text: response["body"]?.try &.as_s || "",
+              size: 0
+            ),
+            redirect_url: "",
+          )
+
+          response["headers"].as_h.each do |k, v|
+            har_response.headers << HAR::Header.new(name: k, value: v.as_s)
+          end
+
+          # Build Entry
+          har.entries << HAR::Entry.new(
+            request: har_request,
+            response: har_response,
+            time: 0.0,
+            timings: HAR::Timings.new(
+              send: 0.0,
+              wait: 0.0,
+              receive: 0.0
+            ),
           )
         end
 
-        # Build Response
-        har_response = HAR::Response.new(
-          status: response["status"].as_i,
-          status_text: HTTP::Status.new(response["status"].as_i).description.to_s,
-          http_version: "HTTP/1.1",
-          content: HAR::Content.new(
-            text: response["body"]?.try &.as_s || "",
-            size: 0
-          ),
-          redirect_url: "",
-        )
-
-        response["headers"].as_h.each do |k, v|
-          har_response.headers << HAR::Header.new(name: k, value: v.as_s)
-        end
-
-        # Build Entry
-        har.entries << HAR::Entry.new(
-          request: har_request,
-          response: har_response,
-          time: 0.0,
-          timings: HAR::Timings.new(
-            send: 0.0,
-            wait: 0.0,
-            receive: 0.0
-          ),
-        )
+        # Updating the list of EPs with a fresh pack
+        ep_id = eps_info["items"][-1]["id"].as_s
+        ep_created_at = eps_info["items"][-1]["createdAt"].as_s
+        eps_info = JSON.parse(get_eps(ep_id, ep_created_at).body.to_s)
       end
 
       puts "\nDone building HAR file, writing to disk..."
@@ -177,12 +197,17 @@ module Restharter
         post_headers["Content-Type"] = builder.content_type
       end
       resp = HTTP::Client.post("https://#{@host}/api/v1/files", headers: post_headers, body: body_io.to_s)
-      puts "Done uploading HAR file #{resp.status_code}"
+      unless resp.success?
+        puts "Error uploading HAR: #{resp.status_code} (#{resp.status})"
+        puts resp.body
+      else
+        puts "Done uploading HAR file #{resp.status_code}"
+      end
       JSON.parse(resp.body.to_s)["id"].to_s
     end
 
     private def get_config : JSON::Any
-      resp = HTTP::Client.get("https://#{@host}/api/v1/scans/#{@scan_id}/config", headers: headers)
+      resp = fetch("https://#{@host}/api/v1/scans/#{@scan_id}/config")
       unless resp.status_code == 200
         puts "Error: Error getting scan config: #{resp.status_code} #{resp.body.to_s}"
         exit 1
@@ -191,15 +216,49 @@ module Restharter
     end
 
     private def get_ep(ep_id : String) : HTTP::Client::Response
-      HTTP::Client.get("https://#{@host}/api/v1/scans/#{@scan_id}/entry-points/#{ep_id}", headers: headers)
+      fetch("https://#{@host}/api/v1/scans/#{@scan_id}/entry-points/#{ep_id}")
     end
 
-    private def get_eps : HTTP::Client::Response
-      HTTP::Client.get("https://#{@host}/api/v1/scans/#{@scan_id}/entry-points", headers: headers)
+    private def get_eps(next_id : String? = nil, next_created_at : String? = nil) : HTTP::Client::Response
+      url = String.build do |s|
+        s << "https://#{@host}/api/v2/scans/#{@scan_id}/entry-points"
+        if next_id && next_created_at
+          s << "?nextId=#{next_id}&nextCreatedAt=#{next_created_at}"
+        end
+      end
+      fetch(url)
     end
 
     private def get_scan : HTTP::Client::Response
-      HTTP::Client.get("https://#{@host}/api/v1/scans/#{@scan_id}", headers: headers)
+      fetch("https://#{@host}/api/v1/scans/#{@scan_id}")
+    end
+
+    private def fetch(url)
+      h = headers
+
+      # Uncomment to see more debug details
+      # puts "Sending request [GET] #{url}"
+      # puts "Request headers:"
+      # h.each do |name, values|
+      #   values.each do |value|
+      #     puts "  - #{name}: #{value}"
+      #   end
+      # end
+
+      response = HTTP::Client.get(url, headers: h)
+
+      # Uncomment to see more debug details
+      # puts "Received (#{response.status_code})"
+      # unless response.success?
+      #   puts response.body
+      # end
+      # puts "Response headers:"
+      # response.headers.each do |name, values|
+      #   values.each do |value|
+      #     puts "  - #{name}: #{value}"
+      #   end
+      # end
+      response
     end
   end
 end
