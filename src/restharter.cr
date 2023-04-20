@@ -71,7 +71,7 @@ module Restharter
           request = ep["request"].as_h
           response = ep["response"].as_h
 
-          percentage = 100.0 * index / total
+          percentage = 100.0 * (index / total)
           puts "[%6.2f %%] %s (%s) %s" % {percentage, ep["id"], request["method"], request["url"]}
 
           # Build Request
@@ -82,19 +82,26 @@ module Restharter
           )
 
           request["headers"].as_h.each do |k, v|
-            har_request.headers << HAR::Header.new(name: k, value: v.as_s)
+            case v
+            when String
+              har_request.headers << HAR::Header.new(name: k, value: v.as_s)
+            when Array
+              v.each do |v2|
+                har_request.headers << HAR::Header.new(name: k, value: v.first.as_s)
+              end
+            end
           end
           if request["body"]?
             har_request.post_data = HAR::PostData.new(
               text: request["body"].as_s,
-              mime_type: request["headers"].as_h["Content-Type"]?.try &.as_s || ""
+              mime_type: request["headers"].as_h["Content-Type"]?.try &.as_s? || ""
             )
           end
 
           # Build Response
           har_response = HAR::Response.new(
             status: response["status"].as_i,
-            status_text: HTTP::Status.new(response["status"].as_i).description.to_s,
+            status_text: "",
             http_version: "HTTP/1.1",
             content: HAR::Content.new(
               text: response["body"]?.try &.as_s || "",
@@ -104,7 +111,14 @@ module Restharter
           )
 
           response["headers"].as_h.each do |k, v|
-            har_response.headers << HAR::Header.new(name: k, value: v.as_s)
+            case v
+            when String
+              har_response.headers << HAR::Header.new(name: k, value: v.as_s)
+            when Array
+              v.each do |v2|
+                har_response.headers << HAR::Header.new(name: k, value: v.first.as_s)
+              end
+            end
           end
 
           # Build Entry
