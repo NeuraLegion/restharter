@@ -4,7 +4,7 @@ require "http"
 require "colorize"
 
 module Restharter
-  VERSION = "0.1.1"
+  VERSION = "0.1.2"
 
   class Run
     @host : String
