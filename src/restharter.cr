@@ -259,7 +259,7 @@ module Restharter
       #   end
       # end
 
-      response = HTTP::Client.get(url, headers: h)
+      response = HTTP::Client.get(url, headers: h, tls: url.starts_with?("https") ? OpenSSL::SSL::Context::Client.insecure : nil)
 
       # Uncomment to see more debug details
       # puts "Received (#{response.status_code})"
